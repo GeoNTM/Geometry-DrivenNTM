@@ -1,43 +1,58 @@
 import torch
-from torch import nn
-from torch.nn import functional as F
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.distributions import LogNormal, Dirichlet
+
+
+class Encoder(nn.Module):
+    def __init__(self, trajectory_dim, hidden_size, dropout):
+        super().__init__()
+        self.drop = nn.Dropout(dropout)
+        self.gru = nn.GRU(trajectory_dim, hidden_size)
+        self.conv = nn.Conv1d(hidden_size, hidden_size, kernel_size=3, padding=1)
+
+    def forward(self, inputs):
+        h1, _ = self.gru(inputs)
+        h2 = F.softplus(self.conv(h1))
+        return self.drop(h2)
+
+
+class HiddenToLogNormal(nn.Module):
+    def __init__(self, hidden_size, num_topics):
+        super().__init__()
+        self.fcmu = nn.Linear(hidden_size, num_topics)
+        self.fclv = nn.Linear(hidden_size, num_topics)
+
+    def forward(self, hidden):
+        mu = self.fcmu(hidden)
+        lv = self.fclv(hidden)
+        dist = LogNormal(mu, (0.5 * lv).exp())
+        return dist
+
+
+class Decoder(nn.Module):
+    def __init__(self, trajectory_dim, hidden_size, num_topics, dropout):
+        super().__init__()
+        self.convT = nn.ConvTranspose1d(hidden_size, hidden_size, kernel_size=3, padding=1)
+        self.gru = nn.GRU(hidden_size, trajectory_dim)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, inputs):
+        h1 = F.relu(self.convT(inputs))
+        h2, _ = self.gru(h1)
+        return self.drop(h2)
+
 
 class GeoDrivenTopicModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim, num_topics):
-        super(GeoDrivenTopicModel, self).__init__()
-        
-        # Inference Network
-        self.inference_net = nn.Sequential(
-            nn.GRU(input_dim, hidden_dim),
-            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 2 * latent_dim)  
-        )
-        
-        # Generative Network
-        self.generative_net = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim),
-            nn.ReLU(),
-            nn.ConvTranspose1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
-            nn.GRU(hidden_dim, input_dim),
-        )
-        
-        self.num_topics = num_topics
+    def __init__(self, trajectory_dim, hidden_size, num_topics, dropout):
+        super().__init__()
+        self.encode = Encoder(trajectory_dim, hidden_size, dropout)
+        self.h2z = HiddenToLogNormal(hidden_size, num_topics)
+        self.decode = Decoder(trajectory_dim, hidden_size, num_topics, dropout)
 
-    def reparameterize(self, mu, logvar):
-        std = logvar.mul(0.5).exp_()
-        eps = std.data.new(std.size()).normal_()
-        return eps.mul(std).add_(mu)
-
-    def forward(self, x):
-        # Inference network
-        mu, logvar = self.inference_net(x).chunk(2, dim=-1)
-        z = self.reparameterize(mu, logvar)
-        
-        # Sample a topic
-        z_topics = F.softmax(z[:,:self.num_topics], dim=1)
-        
-        # Generative network
-        x_recon = self.generative_net(z)
-        
-        return x_recon, mu, logvar, z_topics
+    def forward(self, inputs):
+        h = self.encode(inputs)
+        posterior = self.h2z(h)
+        z = posterior.rsample()
+        outputs = self.decode(z)
+        return outputs, posterior
