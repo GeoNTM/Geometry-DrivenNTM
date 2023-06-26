@@ -17,7 +17,7 @@ class Encoder(nn.Module):
         return self.drop(h2)
 
 
-class HiddenToLogNormal(nn.Module):
+class Hidden(nn.Module):
     def __init__(self, hidden_size, num_topics):
         super().__init__()
         self.fcmu = nn.Linear(hidden_size, num_topics)
