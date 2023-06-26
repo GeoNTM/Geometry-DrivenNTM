@@ -47,12 +47,12 @@ class GeoDrivenTopicModel(nn.Module):
     def __init__(self, trajectory_dim, hidden_size, num_topics, dropout):
         super().__init__()
         self.encode = Encoder(trajectory_dim, hidden_size, dropout)
-        self.h2z = HiddenToLogNormal(hidden_size, num_topics)
+        self.hidz = Hidden(hidden_size, num_topics)
         self.decode = Decoder(trajectory_dim, hidden_size, num_topics, dropout)
 
     def forward(self, inputs):
         h = self.encode(inputs)
-        posterior = self.h2z(h)
+        posterior = self.hidz(h)
         z = posterior.rsample()
         outputs = self.decode(z)
         return outputs, posterior
